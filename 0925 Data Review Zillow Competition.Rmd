@@ -1,0 +1,157 @@
+---
+title: "0925 Data Review Zillow Competition"
+output: html_notebook
+---
+
+```{r}
+library(tianweiR)
+library(dplyr)
+library(ggplot2)
+library(data.table)
+library(caret)
+```
+
+# load data
+```{r}
+data_property=fread('Data/properties_2016.csv',na.strings = c('NA','na','',' '))
+data_train=fread('Data/train_2016_v2.csv',na.strings = c('NA','na','',' '))
+data_test=fread('Data/sample_submission.csv',header = T,na.strings = c('NA','na','',' '))
+```
+
+## link property to error file
+```{r}
+data_train=data_train%>%left_join(data_property)
+```
+
+```{r}
+head(data_train)
+```
+
+
+```{r}
+summary(data_train)
+```
+
+Check the na rate
+```{r}
+check_na_rate(data_train)
+```
+
+# Explorary Data Analysis
+```{r}
+data_train$transactiondate=as.Date(data_train$transactiondate)
+max(data_train$transactiondate);min(data_train$transactiondate)
+```
+```{r}
+data_train%>%
+  group_by(parcelid)%>%
+  summarise(num_entry=length(unique(transactiondate)))%>%
+  filter(num_entry>1)%>%
+  arrange(-num_entry)
+```
+
+
+```{r}
+data_1=data_train%>%filter(parcelid=='10821829')
+plot(data_1$transactiondate,data_1$logerror)
+```
+# Prepare training data
+```{r}
+library(sqldf)
+data_train$transactiondate=as.character(data_train$transactiondate)
+data_unique=sqldf('select a.*
+from data_train a
+inner join (select parcelid, min(date(transactiondate)) min_tran from data_train group by parcelid) b
+on a.parcelid=b.parcelid and a.transactiondate=b.min_tran
+      ',method = "raw")
+
+nrow(data_unique)
+```
+
+```{r}
+length(unique(data_train$parcelid))
+```
+
+
+```{r}
+data_unique
+```
+
+## split data into internal train and test sets
+
+Initial approach on missing value: set NA=-1
+```{r}
+data_unique[is.na(data_unique)]=-1
+```
+
+Create dummy variables
+```{r}
+data_transform=model.matrix(logerror~.-parcelid-transactiondate-1, data=data_unique)
+data_transform=as.data.frame(data_transform)
+data_transform$logerror=data_unique$logerror
+```
+
+```{r}
+head(data_transform)
+```
+
+
+
+```{r}
+train_index=createDataPartition(y = data_unique$logerror,p = 0.8)
+data_train_internal=data_transform[train_index$Resample1,]
+data_test_internal=data_transform[-train_index$Resample1,]
+```
+
+```{r}
+train_y=data_train_internal$logerror
+train_x=as.matrix(data_train_internal%>%select(-logerror))
+
+test_y=data_test_internal$logerror
+test_x=as.matrix(data_test_internal%>%select(-logerror))
+```
+
+```{r}
+dim(train_x)
+```
+
+```{r}
+hist(train_y,n=500)
+```
+
+
+# Experiment with Neural Network
+```{r}
+library(keras)
+```
+
+```{r}
+model <- keras_model_sequential() 
+model %>% 
+  layer_dense(units = 10, activation = 'relu', input_shape = c(2129)) %>% 
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 10, activation = 'relu') %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 1, activation = 'softmax')%>%
+  compile(
+  optimizer = optimizer_rmsprop(lr = 0.0001),
+  loss = 'mse'
+)
+```
+
+```{r}
+model %>% fit(train_x, train_y, epochs=1)
+
+```
+
+```{r}
+summary(model)
+```
+
+predict test data
+```{r}
+predicted_test=predict(model,test_x)
+
+plot(predicted_test,test_y)
+```
+
