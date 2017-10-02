@@ -1,3 +1,4 @@
+
 ---
 title: "0925 Data Review Zillow Competition"
 output: html_notebook
@@ -20,28 +21,47 @@ data_test=fread('Data/sample_submission.csv',header = T,na.strings = c('NA','na'
 
 ## link property to error file
 ```{r}
-data_train=data_train%>%left_join(data_property)
+data_all=data_train%>%left_join(data_property)
 ```
 
 ```{r}
-head(data_train)
+head(data_all)
 ```
 
 
 ```{r}
-summary(data_train)
+str(data_all)
+```
+## give NA 0 values
+```{r}
+data_all[is.na(data_all)]=0
 ```
 
-Check the na rate
+## Correct data type
 ```{r}
-check_na_rate(data_train)
+factor_col_index=which(colnames(data_all) %like% 'id')
+colnames(data_all)[factor_col_index]
+for (i in factor_col_index){
+  data_all[,i]=as.factor(data_all[,i])
+}
 ```
+
+Correct columns that are factors with no id in names
+
+roomcnt missing?? why, probably cannot give it 0
+```{r}
+data_all$hashottuborspa=as.factor(data_all$hashottuborspa)
+data_all$propertycountylandusecode=as.factor(data_all$propertycountylandusecode)
+data_all$rawcensustractandblock=as.factor(data_all$rawcensustractandblock)
+data_all$taxdelinquencyflag=as.factor(data_all$taxdelinquencyflag)
+```
+
+
+
 
 # Explorary Data Analysis
-```{r}
-data_train$transactiondate=as.Date(data_train$transactiondate)
-max(data_train$transactiondate);min(data_train$transactiondate)
-```
+
+we have some records with multiple entries
 ```{r}
 data_train%>%
   group_by(parcelid)%>%
@@ -53,12 +73,56 @@ data_train%>%
 
 ```{r}
 data_1=data_train%>%filter(parcelid=='10821829')
-plot(data_1$transactiondate,data_1$logerror)
 ```
+
+### Check distribution of all numeric columns
+```{r}
+  num_col_index=seq(1:ncol(data_all))[sapply(data_all,is.numeric)]
+
+  for(i in num_col_index){
+    hist(data_all[,i],50,main = paste('Distribution of',colnames(data_all)[i]),xlab=colnames(data_all)[i])
+  }
+  
+```
+
+### continue to correct variables 
+```{r}
+summary(data_all$basementsqft)
+```
+looks like only 1 value existed
+```{r}
+data_all=data_all%>%
+  select(
+    -basementsqft,
+    -finishedfloor1squarefeet,
+    -finishedsquarefeet13,
+    -finishedsquarefeet15,
+    -finishedsquarefeet50,
+    -finishedsquarefeet6,
+    -lotsizesquarefeet,
+    -poolsizesum,
+    -unitcnt,
+    -yardbuildingsqft17,
+    -yardbuildingsqft26
+    
+  )
+```
+
+
+ 
+```{r}
+str(data_all)
+```
+
+## correlation analysis
+```{r}
+plot(data_all$logerror,data_all$taxvaluedollarcnt)
+```
+
+
 # Prepare training data
 ```{r}
 library(sqldf)
-data_train$transactiondate=as.character(data_train$transactiondate)
 data_unique=sqldf('select a.*
 from data_train a
 inner join (select parcelid, min(date(transactiondate)) min_tran from data_train group by parcelid) b
