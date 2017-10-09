@@ -5,6 +5,7 @@ output: html_notebook
 ---
 
 ```{r}
+rm(list=ls())
 library(tianweiR)
 library(dplyr)
 library(ggplot2)
@@ -56,9 +57,6 @@ data_all$rawcensustractandblock=as.factor(data_all$rawcensustractandblock)
 data_all$taxdelinquencyflag=as.factor(data_all$taxdelinquencyflag)
 ```
 
-
-
-
 # Explorary Data Analysis
 
 we have some records with multiple entries
@@ -70,13 +68,12 @@ data_train%>%
   arrange(-num_entry)
 ```
 
-
 ```{r}
 data_1=data_train%>%filter(parcelid=='10821829')
 ```
 
 ### Check distribution of all numeric columns
-```{r}
+```{r,eval=FALSE}
   num_col_index=seq(1:ncol(data_all))[sapply(data_all,is.numeric)]
 
   for(i in num_col_index){
@@ -89,6 +86,7 @@ data_1=data_train%>%filter(parcelid=='10821829')
 ```{r}
 summary(data_all$basementsqft)
 ```
+
 looks like only 1 value existed
 ```{r}
 data_all=data_all%>%
@@ -108,8 +106,6 @@ data_all=data_all%>%
   )
 ```
 
-
- 
 ```{r}
 str(data_all)
 ```
@@ -119,38 +115,113 @@ str(data_all)
 plot(data_all$logerror,data_all$taxvaluedollarcnt)
 ```
 
+### Cap outliers
+```{r}
+num_col_index2=seq(1,ncol(data_all))[sapply(data_all,is.numeric)]
+data_all=cap_outlier_iqr(data_all,num_col_index2[-1])
+```
+
+
 
 # Prepare training data
 ```{r}
-library(sqldf)
-data_unique=sqldf('select a.*
-from data_train a
-inner join (select parcelid, min(date(transactiondate)) min_tran from data_train group by parcelid) b
-on a.parcelid=b.parcelid and a.transactiondate=b.min_tran
-      ',method = "raw")
+# library(sqldf)
+# data_unique=sqldf('select a.*
+# from data_all a
+# inner join (select parcelid, min(date(transactiondate)) min_tran from data_all group by parcelid) b
+# on a.parcelid=b.parcelid and a.transactiondate=b.min_tran
+#       ',method = "raw")
+# 
+# nrow(data_unique)
 
+
+unique_records=data_all%>%group_by(parcelid)%>%summarise(min_tran=as.character(min(as.Date(transactiondate))))%>%ungroup()
+data_unique=data_all%>%inner_join(unique_records,by=c('parcelid','transactiondate'='min_tran'))
 nrow(data_unique)
 ```
 
 ```{r}
-length(unique(data_train$parcelid))
+length(unique(data_all$parcelid))
+```
+
+### Remove factors withi many levels
+```{r}
+summary(data_unique)
+```
+
+
+### remove additional factors with too many levels
+```{r}
+data_unique=data_unique%>%
+  select(-censustractandblock,
+         -taxdelinquencyyear,
+         -regionidzip,
+         -regionidneighborhood,
+         -regionidcity,
+         -rawcensustractandblock,
+         -propertycountylandusecode,
+         -parcelid)
+```
+
+```{r}
+data_unique$assessmentyear=as.factor(data_unique$assessmentyear)
+data_unique$fireplaceflag=as.factor(data_unique$fireplaceflag)
+data_unique$yearbuilt=as.factor(data_unique$yearbuilt)
+data_unique$yearbuilt=as.factor(data_unique$yearbuilt)
+
+
+```
+
+```{r}
+summary(data_unique$roomcnt)
+data_unique=data_unique%>%select(-roomcnt)
+```
+
+
+
+### normalize numeric variables
+```{r}
+num_col_index3=seq(1,ncol(data_unique))[sapply(data_unique,is.numeric)]
+num_col_index3=num_col_index3[-1]
+for(i in num_col_index3){
+  col_min=min(data_unique[,i],na.rm = T)
+  col_max=max(data_unique[,i],na.rm=T)
+  data_unique[,i]=(data_unique[,i]-col_min)/(col_max-col_min)
+  print(paste(colnames(data_unique)[i],col_max))
+}
+```
+
+```{r}
+data_unique=data_unique%>%
+  select(
+    -fireplacecnt,
+    -garagetotalsqft,
+    -poolcnt,
+    -threequarterbathnbr,
+    -numberofstories
+  )
 ```
 
 
 ```{r}
-data_unique
+head(data_unique)
 ```
+
+```{r}
+sapply(data_unique,function(x) length(unique(x)))
+```
+
+```{r}
+data_unique=data_unique%>%select(-assessmentyear)
+```
+
 
 ## split data into internal train and test sets
 
-Initial approach on missing value: set NA=-1
-```{r}
-data_unique[is.na(data_unique)]=-1
-```
 
 Create dummy variables
 ```{r}
-data_transform=model.matrix(logerror~.-parcelid-transactiondate-1, data=data_unique)
+data_transform=model.matrix(logerror~.-transactiondate-1, data=data_unique)
 data_transform=as.data.frame(data_transform)
 data_transform$logerror=data_unique$logerror
 ```
@@ -159,10 +230,19 @@ data_transform$logerror=data_unique$logerror
 head(data_transform)
 ```
 
+remove large log error first
+
+```{r}
+hist(data_transform$logerror,n=100)
+```
 
 
 ```{r}
-train_index=createDataPartition(y = data_unique$logerror,p = 0.8)
+data_transform=data_transform%>%filter(logerror<0.12 & logerror>-0.12)
+```
+
+```{r}
+train_index=createDataPartition(y = data_transform$logerror,p = 0.8)
 data_train_internal=data_transform[train_index$Resample1,]
 data_test_internal=data_transform[-train_index$Resample1,]
 ```
@@ -180,31 +260,33 @@ dim(train_x)
 ```
 
 ```{r}
-hist(train_y,n=500)
+hist(train_y,n=200)
 ```
 
 
 # Experiment with Neural Network
 ```{r}
 library(keras)
+# install_keras()
 ```
+
 
 ```{r}
 model <- keras_model_sequential() 
 model %>% 
-  layer_dense(units = 10, activation = 'relu', input_shape = c(2129)) %>% 
-  layer_dropout(rate = 0.5) %>%
-  layer_dense(units = 10, activation = 'relu') %>%
-  layer_dropout(rate = 0.5) %>%
-  layer_dense(units = 1, activation = 'softmax')%>%
+  layer_dense(units = 100, activation = 'tanh', input_shape = c(2186)) %>% 
+  # layer_dropout(rate = 0.5) %>%
+  # layer_dense(units = 100, activation = 'tanh') %>%
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 1, activation = 'tanh')%>%
   compile(
-  optimizer = optimizer_rmsprop(lr = 0.0001),
-  loss = 'mse'
+  optimizer = optimizer_rmsprop(lr = 0.02),
+  loss = 'mean_absolute_error'
 )
 ```
 
 ```{r}
-model %>% fit(train_x, train_y, epochs=1)
+model %>% fit(train_x, train_y, epochs=10)
 
 ```
 
